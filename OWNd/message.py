@@ -210,7 +210,7 @@ class OWNMessage:
         return (
             self._where_param[1]
             if self._who in [1, 2, 15]
-            and len(self._where_param) > 0
+            and len(self._where_param) > 1
             and self._where_param[0] == "4"
             else None
         )
@@ -451,7 +451,12 @@ class OWNLightingEvent(OWNEvent):
         if self._dimension is not None:
             if self._dimension == 1 or self._dimension == 4:  # Brightness value
                 self._brightness = int(self._dimension_value[0]) - 100
-                self._transition = int(self._dimension_value[1])
+                # Some gateways omit the transition speed in the reply.
+                self._transition = (
+                    int(self._dimension_value[1])
+                    if len(self._dimension_value) > 1
+                    else None
+                )
                 if self._brightness == 0:
                     self._state = 0
                     self._human_readable_log = f"Light {self._where}{self._interface_log_text} is switched off."
@@ -468,7 +473,12 @@ class OWNLightingEvent(OWNEvent):
             elif self._dimension == 5:  # PIR sensitivity
                 self._type = MESSAGE_TYPE_PIR_SENSITIVITY
                 self._pir_sensitivity = int(self._dimension_value[0])
-                self._human_readable_log = f"Light/motion sensor {self._where}{self._interface_log_text} PIR sesitivity is {PIR_SENSITIVITY_MAPPING[self._pir_sensitivity]}."  # pylint: disable=line-too-long
+                _sensitivity = (
+                    PIR_SENSITIVITY_MAPPING[self._pir_sensitivity]
+                    if 0 <= self._pir_sensitivity < len(PIR_SENSITIVITY_MAPPING)
+                    else f"unknown ({self._pir_sensitivity})"
+                )
+                self._human_readable_log = f"Light/motion sensor {self._where}{self._interface_log_text} PIR sensitivity is {_sensitivity}."  # pylint: disable=line-too-long
             elif self._dimension == 6:  # Illuminance value
                 self._type = MESSAGE_TYPE_ILLUMINANCE
                 self._illuminance = int(self._dimension_value[0])
@@ -503,7 +513,11 @@ class OWNLightingEvent(OWNEvent):
         return self._transition
 
     @property
-    def is_on(self) -> bool:
+    def is_on(self) -> bool | None:
+        """True/False when the on/off state is known, None otherwise (e.g. a
+        reply carrying only a dimension such as illuminance or a timer)."""
+        if self._state is None:
+            return None
         return 0 < self._state < 32
 
     @property
@@ -546,7 +560,11 @@ class OWNAutomationEvent(OWNEvent):
         if self._what is not None and self._what != 1000:
             self._state = self._what
 
-        if self._dimension is not None and self._dimension == 10:
+        if (
+            self._dimension is not None
+            and self._dimension == 10
+            and len(self._dimension_value) > 3
+        ):
             self._state = int(self._dimension_value[0])
             self._position = int(self._dimension_value[1])
             self._priority = int(self._dimension_value[2])
@@ -955,7 +973,8 @@ class OWNAlarmEvent(OWNEvent):
     def __init__(self, data):
         super().__init__(data)
 
-        self._state_code = int(self._what)
+        # Dimension replies carry no WHAT: never crash the constructor on it.
+        self._state_code = int(self._what) if self._what is not None else -1
         self._state = None
         self._system = False
         self._zone = None
@@ -1371,12 +1390,12 @@ class OWNEnergyEvent(OWNEvent):
                 self._human_readable_log = f"Sensor {self._sensor} is reporting an active power draw of {self._active_power} W."  # pylint: disable=line-too-long
             elif self._dimension == 511:
                 _now = datetime.date.today()
-                _raw_message_date = datetime.date(
-                    _now.year,
-                    int(self._dimension_param[0]),
-                    int(self._dimension_param[1]),
-                )
                 try:
+                    _raw_message_date = datetime.date(
+                        _now.year,
+                        int(self._dimension_param[0]),
+                        int(self._dimension_param[1]),
+                    )
                     if _raw_message_date > _now:
                         _message_date = datetime.date(
                             _now.year - 1,
@@ -1384,12 +1403,10 @@ class OWNEnergyEvent(OWNEvent):
                             int(self._dimension_param[1]),
                         )
                     else:
-                        _message_date = datetime.date(
-                            _now.year,
-                            int(self._dimension_param[0]),
-                            int(self._dimension_param[1]),
-                        )
-                except ValueError:
+                        _message_date = _raw_message_date
+                except (ValueError, IndexError):
+                    # Invalid date for the current year (e.g. Feb 29) or
+                    # missing parameters: drop the sample, keep the session.
                     return
 
                 if int(self._dimension_value[0]) != 25:
@@ -1405,10 +1422,10 @@ class OWNEnergyEvent(OWNEvent):
                     self._human_readable_log = f"Sensor {self._sensor} is reporting a power consumption of {self._daily_consumption['value']} Wh for {self._daily_consumption['date']}."  # pylint: disable=line-too-long
             elif self._dimension == 513 or self._dimension == 514:
                 _now = datetime.date.today()
-                _raw_message_date = datetime.date(
-                    _now.year, int(self._dimension_param[0]), 1
-                )
                 try:
+                    _raw_message_date = datetime.date(
+                        _now.year, int(self._dimension_param[0]), 1
+                    )
                     if self._dimension == 513 and _raw_message_date > _now:
                         _message_date = datetime.date(
                             _now.year - 1,
@@ -1434,7 +1451,7 @@ class OWNEnergyEvent(OWNEvent):
                             int(self._dimension_param[0]),
                             int(self._dimension_value[0]),
                         )
-                except ValueError:
+                except (ValueError, IndexError):
                     return
                 self._type = MESSAGE_TYPE_DAILY_CONSUMPTION
                 self._daily_consumption["date"] = _message_date
@@ -1450,9 +1467,16 @@ class OWNEnergyEvent(OWNEvent):
                 self._human_readable_log = f"Sensor {self._sensor} is reporting a power consumption of {self._current_day_partial_consumption} Wh up to now today."  # pylint: disable=line-too-long
             elif self._dimension == 52:
                 self._type = MESSAGE_TYPE_MONTHLY_CONSUMPTION
-                _message_date = datetime.date(
-                    int(f"20{self._dimension_param[0]}"), self._dimension_param[1], 1
-                )
+                try:
+                    # The month must be converted to int: passing the raw
+                    # string to datetime.date raises TypeError.
+                    _message_date = datetime.date(
+                        int(f"20{self._dimension_param[0]}"),
+                        int(self._dimension_param[1]),
+                        1,
+                    )
+                except (ValueError, IndexError):
+                    return
                 self._monthly_consumption["date"] = _message_date
                 self._monthly_consumption["value"] = int(self._dimension_value[0])
                 self._human_readable_log = f"Sensor {self._sensor} is reporting a power consumption of {self._monthly_consumption['value']} Wh for {self._monthly_consumption['date'].strftime('%B %Y')}."  # pylint: disable=line-too-long
@@ -1503,7 +1527,8 @@ class OWNDryContactEvent(OWNEvent):
         super().__init__(data)
 
         self._state = 1 if self._what == 31 else 0
-        self._detection = int(self._what_param[0])
+        # The detection parameter may be missing on some frames.
+        self._detection = int(self._what_param[0]) if self._what_param else 0
         self._sensor = self._where[1:]
 
         if self._detection == 1:
@@ -1625,11 +1650,15 @@ class OWNCommand(OWNMessage):
             if _who == 22 or _who == 24:
                 return cls(data)
             if _who == 25:
-                _where = re.match(r"^\*.+\*(?P<where>\d+)##$", data).group("where")
-                if _where.startswith("2"):
-                    return cls(data)
-                if _where.startswith("3"):
-                    return OWNDryContactCommand(data)
+                # Same defensive guard as OWNEvent.parse: a non-matching WHERE
+                # must yield None, not an AttributeError.
+                _where_match = re.match(r"^\*.+\*(?P<where>\d+)##$", data)
+                if _where_match:
+                    _where = _where_match.group("where")
+                    if _where.startswith("2"):
+                        return cls(data)
+                    if _where.startswith("3"):
+                        return OWNDryContactCommand(data)
             elif _who > 1000:
                 return cls(data)
 

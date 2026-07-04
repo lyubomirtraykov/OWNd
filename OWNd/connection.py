@@ -323,8 +323,11 @@ class OWNSession:
                 (
                     self._stream_reader,
                     self._stream_writer,
-                ) = await asyncio.open_connection(
-                    self._gateway.address, self._gateway.port
+                ) = await asyncio.wait_for(
+                    asyncio.open_connection(
+                        self._gateway.address, self._gateway.port
+                    ),
+                    timeout=CONNECT_TIMEOUT,
                 )
                 break
             except (ConnectionRefusedError, TimeoutError, OSError) as error:
@@ -392,6 +395,10 @@ class OWNSession:
                         result.get("Message"),
                     )
                     self._set_connected(False)
+                    # The TCP connection survived the rejected negotiation:
+                    # release it, it will not be used.
+                    with contextlib.suppress(Exception):
+                        await self.close()
                     return result
                 reason = f"negotiation failed ({result.get('Message')})"
                 wait = max(1, retry_count * 2)
@@ -409,6 +416,12 @@ class OWNSession:
                 reason, wait = f"network error ({error})", max(1, retry_count * 2)
 
             retry_count += 1
+            # A failed attempt can leave a half-open socket behind (e.g. TCP
+            # connected but negotiation failed or was reset): release it before
+            # retrying or giving up, so retries never accumulate leaked
+            # descriptors.
+            with contextlib.suppress(Exception):
+                await self.close()
             if retry_count >= MAX_CONNECT_ATTEMPTS:
                 self._logger.warning(
                     "%s %s session could not be established after %d attempts; "
@@ -827,9 +840,6 @@ class OWNEventSession(OWNSession):
                 data = await asyncio.wait_for(read, timeout=self._inactivity_timeout)
             else:
                 data = await read
-            _decoded_data = data.decode()
-            _message = OWNMessage.parse(_decoded_data)
-            return _message if _message else _decoded_data
         except TimeoutError:
             self._logger.warning(
                 "%s No bus traffic for %ss; assuming stale connection, reconnecting...",
@@ -856,6 +866,21 @@ class OWNEventSession(OWNSession):
                 "%s Event session crashed, reconnecting...", self._gateway.log_id
             )
             await self._reconnect()
+            return None
+
+        # A frame was read successfully: from here on, any failure is a
+        # *parsing* problem, not a connection problem. Never tear the session
+        # down (and lose bus events) over a frame we could not make sense of.
+        try:
+            _decoded_data = data.decode()
+            _message = OWNMessage.parse(_decoded_data)
+            return _message if _message else _decoded_data
+        except Exception:  # pylint: disable=broad-except
+            self._logger.exception(
+                "%s Could not parse frame %r; skipping it.",
+                self._gateway.log_id,
+                data,
+            )
             return None
 
 
