@@ -20,6 +20,17 @@ DEFAULT_PORT = 20000
 # Bound discovery HTTP calls: a gateway that accepts the connection but never
 # answers must not hang the discovery task indefinitely.
 DISCOVERY_HTTP_TIMEOUT = aiohttp.ClientTimeout(total=10)
+# USN prefixes identifying BTicino/Legrand OpenWebNet gateways in SSDP replies.
+GATEWAY_USN_PREFIXES = (
+    "uuid:pnp-webserver-",
+    "uuid:pnp-scheduler-",
+    "uuid:pnp-scheduler201-",
+    "uuid:pnp-touchscreen-",
+    "uuid:pnp-myhomeserver1-",
+    "uuid:upnp-Basic gateway-",
+    "uuid:upnp-IPscenariomodule-",
+    "uuid:upnp-IPscenarioModule-",
+)
 
 
 def _node_text(xml, tag: str, default: str | None = None) -> str | None:
@@ -154,39 +165,39 @@ class SimpleServiceDiscoveryProtocol(asyncio.DatagramProtocol):
         self._transport = transport
 
     def datagram_received(self, data, addr):
-        data = data.decode()
+        # Anything on the network may answer an M-SEARCH: treat every datagram
+        # as untrusted and never raise from this callback (an exception here
+        # is only swallowed and logged by the event loop as an error).
+        try:
+            data = data.decode()
+        except UnicodeDecodeError:
+            return
 
-        if data.startswith("HTTP/"):
+        if not data.startswith("HTTP/"):
+            return
+
+        try:
             response = SSDPResponse.parse(data)
-            if (
-                response.headers_dictionary["USN"].startswith("uuid:pnp-webserver-")
-                or response.headers_dictionary["USN"].startswith("uuid:pnp-scheduler-")
-                or response.headers_dictionary["USN"].startswith(
-                    "uuid:pnp-scheduler201-"
-                )
-                or response.headers_dictionary["USN"].startswith(
-                    "uuid:pnp-touchscreen-"
-                )
-                or response.headers_dictionary["USN"].startswith(
-                    "uuid:pnp-myhomeserver1-"
-                )
-                or response.headers_dictionary["USN"].startswith(
-                    "uuid:upnp-Basic gateway-"
-                )
-                or response.headers_dictionary["USN"].startswith(
-                    "uuid:upnp-IPscenariomodule-"
-                )
-                or response.headers_dictionary["USN"].startswith(
-                    "uuid:upnp-IPscenarioModule-"
-                )
-            ):
-                self._recvq.put_nowait(
-                    {
-                        "address": addr[0],
-                        "ssdp_location": response.headers_dictionary["LOCATION"],
-                        "ssdp_st": response.headers_dictionary["ST"],
-                    }
-                )
+        except (ValueError, IndexError):
+            # Malformed status line or headers: not a usable SSDP response.
+            return
+
+        headers = response.headers_dictionary
+        usn = headers.get("USN", "")
+        location = headers.get("LOCATION")
+        ssdp_st = headers.get("ST")
+
+        if location is None or ssdp_st is None:
+            return
+
+        if usn.startswith(GATEWAY_USN_PREFIXES):
+            self._recvq.put_nowait(
+                {
+                    "address": addr[0],
+                    "ssdp_location": location,
+                    "ssdp_st": ssdp_st,
+                }
+            )
 
     def error_received(self, exc):
         self._excq.put_nowait(exc)

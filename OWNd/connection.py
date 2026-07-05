@@ -897,6 +897,10 @@ class OWNCommandSession(OWNSession):
             logger=logger,
             on_state_change=on_state_change,
         )
+        # Serializes concurrent senders sharing this session (e.g. the
+        # keepalive loop and a regular command): interleaved write/read pairs
+        # on the same stream would steal each other's acknowledgements.
+        self._send_lock = asyncio.Lock()
 
     @classmethod
     async def send_to_gateway(cls, message: str, gateway: OWNGateway):
@@ -965,10 +969,18 @@ class OWNCommandSession(OWNSession):
         """Send the attached message on an existing 'command' connection,
         actively reconnecting it if it had been reset.
 
+        Concurrency-safe: an internal lock serializes callers sharing this
+        session (e.g. ``run_keepalive`` alongside regular commands), so the
+        write/read-acknowledgement pairs can never interleave.
+
         Retries (both on NACK and on connection reset/timeout) are bounded and
         iterative, never recursive, so a flapping connection can neither grow
         the call stack nor loop forever.
         """
+        async with self._send_lock:
+            await self._locked_send(message, is_status_request)
+
+    async def _locked_send(self, message, is_status_request: bool = False) -> None:
         max_attempts = 3
 
         for attempt in range(1, max_attempts + 1):
