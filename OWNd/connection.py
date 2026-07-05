@@ -51,6 +51,16 @@ TCP_KEEPALIVE_CNT = 3  # declare dead after 3 missed probes (~60s total)
 _FATAL_NEGOTIATION_ERRORS = frozenset(
     {"password_required", "password_error", "negociation_error"}
 )
+# Pause before the next reconnection cycle when connect() returned without an
+# open stream (gave up after MAX_CONNECT_ATTEMPTS, or hit a fatal negotiation
+# error). Without this pause the event read loop would spin at full speed,
+# hammering the gateway with connection attempts (observed ~100/s on an MH201
+# whose session slots were exhausted after an outage: the flood prevented it
+# from ever expiring its stale sessions and recovering on its own).
+RECONNECT_PAUSE = 10
+# Longer pause when the failure was fatal (e.g. a genuinely wrong password):
+# retrying fast cannot help, and every attempt costs the gateway a session.
+RECONNECT_PAUSE_FATAL = 60
 
 
 class OWNGateway:
@@ -659,10 +669,16 @@ class OWNSession:
                 self._type,
             )
         except asyncio.IncompleteReadError:
+            # The gateway closed the connection mid-negotiation. This is NOT
+            # a password problem: it happens when the gateway is busy or out
+            # of session slots (e.g. an MH201 still holding stale sessions
+            # right after an outage). It must be treated as transient — never
+            # as a fatal error — so connect() retries it with back-off.
             error = True
-            error_message = "password_error"
-            self._logger.error(
-                "%s Connection closed while negotiating %s session.",
+            error_message = "connection_closed"
+            self._logger.warning(
+                "%s Connection closed by the gateway while negotiating %s "
+                "session (busy or out of session slots?); will retry.",
                 self._gateway.log_id,
                 self._type,
             )
@@ -826,13 +842,29 @@ class OWNEventSession(OWNSession):
         """
         if self._stream_reader is None:
             # No live connection (e.g. a previous reconnect attempt gave up).
-            # connect() applies its own back-off, so this is a slow retry, not
-            # a busy loop.
             self._logger.warning(
                 "%s Event session not connected, reconnecting...",
                 self._gateway.log_id,
             )
-            await self._reconnect()
+            result = await self._reconnect()
+            if self._stream_reader is None:
+                # Still no stream: connect() gave up or failed fatally and
+                # returned IMMEDIATELY (its internal back-off only covers the
+                # transient retries). Pause here, otherwise the caller's read
+                # loop would re-enter this branch instantly and flood the
+                # gateway with connection attempts.
+                pause = (
+                    RECONNECT_PAUSE_FATAL
+                    if result is not None
+                    and result.get("Message") in _FATAL_NEGOTIATION_ERRORS
+                    else RECONNECT_PAUSE
+                )
+                self._logger.warning(
+                    "%s Reconnection failed; next attempt in %ss.",
+                    self._gateway.log_id,
+                    pause,
+                )
+                await asyncio.sleep(pause)
             return None
         try:
             read = self._stream_reader.readuntil(OWNSession.SEPARATOR)
