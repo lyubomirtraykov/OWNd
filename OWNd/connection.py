@@ -49,7 +49,7 @@ TCP_KEEPALIVE_INTVL = 10  # probe every 10s
 TCP_KEEPALIVE_CNT = 3  # declare dead after 3 missed probes (~60s total)
 # Negotiation failures that will never succeed on a retry: don't loop on them.
 _FATAL_NEGOTIATION_ERRORS = frozenset(
-    {"password_required", "password_error", "negociation_error"}
+    {"password_required", "password_error", "negotiation_error"}
 )
 # Pause before the next reconnection cycle when connect() returned without an
 # open stream (gave up after MAX_CONNECT_ATTEMPTS, or hit a fatal negotiation
@@ -203,7 +203,10 @@ class OWNSession:
 
         self._gateway = gateway
         self._type = connection_type.lower()
-        self._logger = logger
+        # A session must always be able to log: fall back to the module
+        # logger when the caller provides none (e.g. the classmethod helpers),
+        # instead of crashing on `None.warning(...)` and masking the real error.
+        self._logger = logger if logger is not None else logging.getLogger(__name__)
         self._on_state_change = on_state_change
         self._connected = False
         # Enable OS-level TCP keepalive on the socket (event session only).
@@ -582,11 +585,16 @@ class OWNSession:
                             )
                         elif resulting_message.is_nonce():
                             hmac_response = resulting_message.nonce
-                            if hmac_response == self._decode_hmac_response(
+                            expected_response = self._decode_hmac_response(
                                 method=method,
                                 password=self._gateway.password,
                                 nonce_a=server_random_string_ra,
                                 nonce_b=client_random_string_rb,
+                            )
+                            # Constant-time comparison: never leak through
+                            # timing how much of the digest matched.
+                            if expected_response is not None and hmac.compare_digest(
+                                hmac_response, expected_response
                             ):
                                 self._stream_writer.write(b"*#*1##")
                                 await self._stream_writer.drain()
@@ -602,7 +610,7 @@ class OWNSession:
                                 self._stream_writer.write(b"*#*0##")
                                 await self._stream_writer.drain()
                                 error = True
-                                error_message = "negociation_error"
+                                error_message = "negotiation_error"
                                 self._logger.error(
                                     "%s Error while opening %s session: HMAC authentication failed.",
                                     self._gateway.log_id,

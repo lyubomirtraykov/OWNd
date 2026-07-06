@@ -71,9 +71,9 @@ class OWNMessage:
         self._where = ""
         self._is_valid_message = False
 
-        if self._STATUS.match(self._raw):
+        if match := self._STATUS.match(self._raw):
             self._is_valid_message = True
-            self._match = self._STATUS.match(self._raw)
+            self._match = match
             self._family = "EVENT"
             self._message_type = "STATUS"
             self._who = int(self._match.group("who"))
@@ -89,9 +89,9 @@ class OWNMessage:
             self._dimension_param = None
             self._dimension_value = None
 
-        elif self._STATUS_REQUEST.match(self._raw):
+        elif match := self._STATUS_REQUEST.match(self._raw):
             self._is_valid_message = True
-            self._match = self._STATUS_REQUEST.match(self._raw)
+            self._match = match
             self._family = "REQUEST"
             self._message_type = "STATUS_REQUEST"
             self._who = int(self._match.group("who"))
@@ -104,9 +104,9 @@ class OWNMessage:
             self._dimension_param = None
             self._dimension_value = None
 
-        elif self._DIMENSION_REQUEST.match(self._raw):
+        elif match := self._DIMENSION_REQUEST.match(self._raw):
             self._is_valid_message = True
-            self._match = self._DIMENSION_REQUEST.match(self._raw)
+            self._match = match
             self._family = "REQUEST"
             self._message_type = "DIMENSION_REQUEST"
             self._who = int(self._match.group("who"))
@@ -119,9 +119,9 @@ class OWNMessage:
             self._dimension_param = None
             self._dimension_value = None
 
-        elif self._DIMENSION_REQUEST_REPLY.match(self._raw):
+        elif match := self._DIMENSION_REQUEST_REPLY.match(self._raw):
             self._is_valid_message = True
-            self._match = self._DIMENSION_REQUEST_REPLY.match(self._raw)
+            self._match = match
             self._family = "EVENT"
             self._message_type = "DIMENSION_REQUEST_REPLY"
             self._who = int(self._match.group("who"))
@@ -136,9 +136,9 @@ class OWNMessage:
             self._dimension_value = self._match.group("dimension_value").split("*")
             del self._dimension_value[0]
 
-        elif self._DIMENSION_WRITING.match(self._raw):
+        elif match := self._DIMENSION_WRITING.match(self._raw):
             self._is_valid_message = True
-            self._match = self._DIMENSION_WRITING.match(self._raw)
+            self._match = match
             self._family = "COMMAND"
             self._message_type = "DIMENSION_WRITING"
             self._who = int(self._match.group("who"))
@@ -250,11 +250,13 @@ class OWNMessage:
                 _event.update({"where parameters": self._where_param[2:]})
         elif self._where_param:
             _event.update({"where parameters": self._where_param})
-        if self._what:
+        # Explicit None checks: 0 is meaningful (what=0 is OFF, dimension=0
+        # is temperature) and must not be dropped from the event payload.
+        if self._what is not None:
             _event.update({"what": self._what})
         if self._what_param:
             _event.update({"what parameters": self._what_param})
-        if self._dimension:
+        if self._dimension is not None:
             _event.update({"dimension": self._dimension})
         if self._dimension_param:
             _event.update({"dimension parameters": self._dimension_param})
@@ -1092,47 +1094,47 @@ class OWNAuxEvent(OWNEvent):
         self._state = self._what
         if self._state == 0:
             self._human_readable_log = (
-                f"Auxilliary channel {self._channel} is set to 'OFF'."
+                f"Auxiliary channel {self._channel} is set to 'OFF'."
             )
         elif self._state == 1:
             self._human_readable_log = (
-                f"Auxilliary channel {self._channel} is set to 'ON'."
+                f"Auxiliary channel {self._channel} is set to 'ON'."
             )
         elif self._state == 2:
             self._human_readable_log = (
-                f"Auxilliary channel {self._channel} is set to 'TOGGLE'."
+                f"Auxiliary channel {self._channel} is set to 'TOGGLE'."
             )
         elif self._state == 3:
             self._human_readable_log = (
-                f"Auxilliary channel {self._channel} is set to 'STOP'."
+                f"Auxiliary channel {self._channel} is set to 'STOP'."
             )
         elif self._state == 4:
             self._human_readable_log = (
-                f"Auxilliary channel {self._channel} is set to 'UP'."
+                f"Auxiliary channel {self._channel} is set to 'UP'."
             )
         elif self._state == 5:
             self._human_readable_log = (
-                f"Auxilliary channel {self._channel} is set to 'DOWN'."
+                f"Auxiliary channel {self._channel} is set to 'DOWN'."
             )
         elif self._state == 6:
             self._human_readable_log = (
-                f"Auxilliary channel {self._channel} is set to 'ENABLED'."
+                f"Auxiliary channel {self._channel} is set to 'ENABLED'."
             )
         elif self._state == 7:
             self._human_readable_log = (
-                f"Auxilliary channel {self._channel} is set to 'DISABLED'."
+                f"Auxiliary channel {self._channel} is set to 'DISABLED'."
             )
         elif self._state == 8:
             self._human_readable_log = (
-                f"Auxilliary channel {self._channel} is set to 'RESET_GEN'."
+                f"Auxiliary channel {self._channel} is set to 'RESET_GEN'."
             )
         elif self._state == 9:
             self._human_readable_log = (
-                f"Auxilliary channel {self._channel} is set to 'RESET_BI'."
+                f"Auxiliary channel {self._channel} is set to 'RESET_BI'."
             )
         elif self._state == 10:
             self._human_readable_log = (
-                f"Auxilliary channel {self._channel} is set to 'RESET_TRI'."
+                f"Auxiliary channel {self._channel} is set to 'RESET_TRI'."
             )
 
     @property
@@ -1331,13 +1333,13 @@ class OWNSceneEvent(OWNEvent):
         if self._state == 1:
             _status = "started"
         elif self._state == 2:
-            _status = "stoped"
+            _status = "stopped"
         elif self._state == 3:
             _status = "enabled"
         elif self._state == 4:
             _status = "disabled"
         else:
-            _status = f"unknonwn ({self._state})"
+            _status = f"unknown ({self._state})"
 
         self._human_readable_log = f"Scene {self._scene} is {_status}."
 
@@ -1697,14 +1699,14 @@ class OWNLightingCommand(OWNCommand):
         return message
 
     @classmethod
-    def flash(cls, where, _freqency=0.5):
-        if _freqency is not None and _freqency >= 0.5 and _freqency <= 5:
-            _freqency = round(_freqency * 2) / 2
+    def flash(cls, where, _frequency=0.5):
+        if _frequency is not None and _frequency >= 0.5 and _frequency <= 5:
+            _frequency = round(_frequency * 2) / 2
         else:
-            _freqency = 0.5
-        _what = int((_freqency / 0.5) + 19)
+            _frequency = 0.5
+        _what = int((_frequency / 0.5) + 19)
         message = cls(f"*1*{_what}*{where}##")
-        message._human_readable_log = f"Flashing light {message._where}{message._interface_log_text} every {_freqency}s."
+        message._human_readable_log = f"Flashing light {message._where}{message._interface_log_text} every {_frequency}s."
         return message
 
     @classmethod
@@ -1769,7 +1771,7 @@ class OWNAutomationCommand(OWNCommand):
     def stop_shutter(cls, where):
         message = cls(f"*2*0*{where}##")
         message._human_readable_log = (
-            f"Stoping shutter {message._where}{message._interface_log_text}."
+            f"Stopping shutter {message._where}{message._interface_log_text}."
         )
         return message
 
@@ -2088,35 +2090,35 @@ class OWNSignaling(OWNMessage):
         self._type = "UNKNOWN"
         self._human_readable_log = data
 
-        if self._ACK.match(self._raw):
-            self._match = self._ACK.match(self._raw)
+        if match := self._ACK.match(self._raw):
+            self._match = match
             self._family = "SIGNALING"
             self._type = "ACK"
             self._human_readable_log = "ACK."
-        elif self._NACK.match(self._raw):
-            self._match = self._NACK.match(self._raw)
+        elif match := self._NACK.match(self._raw):
+            self._match = match
             self._family = "SIGNALING"
             self._type = "NACK"
             self._human_readable_log = "NACK."
-        elif self._NONCE.match(self._raw):
-            self._match = self._NONCE.match(self._raw)
+        elif match := self._NONCE.match(self._raw):
+            self._match = match
             self._family = "SIGNALING"
             self._type = "NONCE"
             self._human_readable_log = (
                 f"Nonce challenge received: {self._match.group(1)}."
             )
-        elif self._SHA.match(self._raw):
-            self._match = self._SHA.match(self._raw)
+        elif match := self._SHA.match(self._raw):
+            self._match = match
             self._family = "SIGNALING"
             self._type = f"SHA{'-1' if self._match.group(1) == '1' else '-256'}"
             self._human_readable_log = f"SHA{'-1' if self._match.group(1) == '1' else '-256'} challenge received."  # pylint: disable=line-too-long
-        elif self._COMMAND_SESSION.match(self._raw):
-            self._match = self._COMMAND_SESSION.match(self._raw)
+        elif match := self._COMMAND_SESSION.match(self._raw):
+            self._match = match
             self._family = "SIGNALING"
             self._type = "COMMAND_SESSION"
             self._human_readable_log = "Command session requested."
-        elif self._EVENT_SESSION.match(self._raw):
-            self._match = self._EVENT_SESSION.match(self._raw)
+        elif match := self._EVENT_SESSION.match(self._raw):
+            self._match = match
             self._family = "SIGNALING"
             self._type = "EVENT_SESSION"
             self._human_readable_log = "Event session requested."
@@ -2124,14 +2126,16 @@ class OWNSignaling(OWNMessage):
     @property
     def nonce(self):
         """Return the authentication nonce IF the message is a nonce message"""
-        if self.is_nonce:  # pylint: disable=using-constant-test
+        # NB: is_nonce is a method — referencing it without calling it was
+        # always truthy, making this guard ineffective.
+        if self.is_nonce():
             return self._match.group(1)
         return None
 
     @property
     def sha_version(self):
         """Return the authentication SHA version IF the message is a SHA challenge message"""
-        if self.is_sha:  # pylint: disable=using-constant-test
+        if self.is_sha():
             return self._match.group(1)
         return None
 
