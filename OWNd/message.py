@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime
 import re
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from dateutil.relativedelta import relativedelta
@@ -64,94 +65,79 @@ class OWNMessage:
     """ Base class for all OWN messages """
 
     def __init__(self, data):
-        self._raw = data
-        self._human_readable_log = self._raw
-        self._family = ""
-        self._who = ""
-        self._where = ""
-        self._is_valid_message = False
+        self._raw: str = data
+        self._human_readable_log: str = self._raw
+        self._family: str = ""
+        self._message_type: str | None = None
+        self._match: re.Match[str] | None = None
+        self._is_valid_message: bool = False
+        # Explicit attribute types: every branch below only overrides what the
+        # frame actually carries; missing parts keep these defaults (empty
+        # lists instead of None, so consumers can index/iterate safely).
+        self._who: int | None = None
+        self._what: int | None = None
+        self._what_param: list[str] = []
+        self._where: str = ""
+        self._where_param: list[str] = []
+        self._dimension: int | None = None
+        self._dimension_param: list[str] = []
+        self._dimension_value: list[str] = []
 
         if match := self._STATUS.match(self._raw):
             self._is_valid_message = True
             self._match = match
             self._family = "EVENT"
             self._message_type = "STATUS"
-            self._who = int(self._match.group("who"))
-            self._what = int(self._match.group("what"))
+            self._who = int(match.group("who"))
+            self._what = int(match.group("what"))
             if self._what == 1000:
                 self._family = "COMMAND_TRANSLATION"
-            self._what_param = self._match.group("what_param").split("#")
-            del self._what_param[0]
-            self._where = self._match.group("where")
-            self._where_param = self._match.group("where_param").split("#")
-            del self._where_param[0]
-            self._dimension = None
-            self._dimension_param = None
-            self._dimension_value = None
+            self._what_param = match.group("what_param").split("#")[1:]
+            self._where = match.group("where")
+            self._where_param = match.group("where_param").split("#")[1:]
 
         elif match := self._STATUS_REQUEST.match(self._raw):
             self._is_valid_message = True
             self._match = match
             self._family = "REQUEST"
             self._message_type = "STATUS_REQUEST"
-            self._who = int(self._match.group("who"))
-            self._what = None
-            self._what_param = None
-            self._where = self._match.group("where")
-            self._where_param = self._match.group("where_param").split("#")
-            del self._where_param[0]
-            self._dimension = None
-            self._dimension_param = None
-            self._dimension_value = None
+            self._who = int(match.group("who"))
+            self._where = match.group("where")
+            self._where_param = match.group("where_param").split("#")[1:]
 
         elif match := self._DIMENSION_REQUEST.match(self._raw):
             self._is_valid_message = True
             self._match = match
             self._family = "REQUEST"
             self._message_type = "DIMENSION_REQUEST"
-            self._who = int(self._match.group("who"))
-            self._what = None
-            self._what_param = None
-            self._where = self._match.group("where")
-            self._where_param = self._match.group("where_param").split("#")
-            del self._where_param[0]
-            self._dimension = int(self._match.group("dimension"))
-            self._dimension_param = None
-            self._dimension_value = None
+            self._who = int(match.group("who"))
+            self._where = match.group("where") or ""
+            self._where_param = (match.group("where_param") or "").split("#")[1:]
+            self._dimension = int(match.group("dimension"))
 
         elif match := self._DIMENSION_REQUEST_REPLY.match(self._raw):
             self._is_valid_message = True
             self._match = match
             self._family = "EVENT"
             self._message_type = "DIMENSION_REQUEST_REPLY"
-            self._who = int(self._match.group("who"))
-            self._what = None
-            self._what_param = None
-            self._where = self._match.group("where")
-            self._where_param = self._match.group("where_param").split("#")
-            del self._where_param[0]
-            self._dimension = int(self._match.group("dimension"))
-            self._dimension_param = self._match.group("dimension_param").split("#")
-            del self._dimension_param[0]
-            self._dimension_value = self._match.group("dimension_value").split("*")
-            del self._dimension_value[0]
+            self._who = int(match.group("who"))
+            self._where = match.group("where") or ""
+            self._where_param = (match.group("where_param") or "").split("#")[1:]
+            self._dimension = int(match.group("dimension"))
+            self._dimension_param = (match.group("dimension_param") or "").split("#")[1:]
+            self._dimension_value = match.group("dimension_value").split("*")[1:]
 
         elif match := self._DIMENSION_WRITING.match(self._raw):
             self._is_valid_message = True
             self._match = match
             self._family = "COMMAND"
             self._message_type = "DIMENSION_WRITING"
-            self._who = int(self._match.group("who"))
-            self._what = None
-            self._what_param = None
-            self._where = self._match.group("where")
-            self._where_param = self._match.group("where_param").split("#")
-            del self._where_param[0]
-            self._dimension = int(self._match.group("dimension"))
-            self._dimension_param = self._match.group("dimension_param").split("#")
-            del self._dimension_param[0]
-            self._dimension_value = self._match.group("dimension_value").split("*")
-            del self._dimension_value[0]
+            self._who = int(match.group("who"))
+            self._where = match.group("where") or ""
+            self._where_param = (match.group("where_param") or "").split("#")[1:]
+            self._dimension = int(match.group("dimension"))
+            self._dimension_param = (match.group("dimension_param") or "").split("#")[1:]
+            self._dimension_value = match.group("dimension_value").split("*")[1:]
 
     @classmethod
     def parse(cls, data) -> OWNMessage | None:
@@ -195,7 +181,7 @@ class OWNMessage:
         return self._is_valid_message
 
     @property
-    def who(self) -> int:
+    def who(self) -> int | None:
         """The 'who' ID of the subject of this message"""
         return self._who
 
@@ -205,7 +191,7 @@ class OWNMessage:
         return self._where  # [1:] if self._where.startswith('#') else self._where
 
     @property
-    def interface(self) -> str:
+    def interface(self) -> str | None:
         """The 'where' parameter corresponding to the bus interface of the subject of this message"""
         return (
             self._where_param[1]
@@ -216,8 +202,8 @@ class OWNMessage:
         )
 
     @property
-    def dimension(self) -> str:
-        """The 'where' ID of the subject of this message"""
+    def dimension(self) -> int | None:
+        """The 'dimension' ID of this message"""
         return self._dimension
 
     @property
@@ -235,11 +221,11 @@ class OWNMessage:
         )
 
     @property
-    def event_content(self) -> dict:
-        _event = {
+    def event_content(self) -> dict[str, Any]:
+        _event: dict[str, Any] = {
             "message": self._raw,
             "family": self._family.replace("_", " ").capitalize(),
-            "type": self._message_type.replace("_", " ").capitalize(),
+            "type": (self._message_type or "").replace("_", " ").capitalize(),
             "who": self._who,
         }
         if self._where:
@@ -304,13 +290,13 @@ class OWNMessage:
         return False
 
     @property
-    def group(self) -> int:
+    def group(self) -> int | None:
         if self.is_group:
             return int(self._where[1:])
         return None
 
     @property
-    def area(self) -> int:
+    def area(self) -> int | None:
         if self.is_area:
             return 10 if self._where == "100" else int(self._where)
         return None
@@ -391,17 +377,17 @@ class OWNLightingEvent(OWNEvent):
     def __init__(self, data):
         super().__init__(data)
 
-        self._type = None
-        self._state = None
-        self._brightness = None
-        self._brightness_preset = None
-        self._transition = None
-        self._timer = None
-        self._blinker = None
-        self._illuminance = None
-        self._motion = False
-        self._pir_sensitivity = None
-        self._motion_timeout = None
+        self._type: str | None = None
+        self._state: int | None = None
+        self._brightness: int | None = None
+        self._brightness_preset: int | None = None
+        self._transition: int | None = None
+        self._timer: float | None = None
+        self._blinker: float | None = None
+        self._illuminance: int | None = None
+        self._motion: bool = False
+        self._pir_sensitivity: int | None = None
+        self._motion_timeout: datetime.timedelta | None = None
 
         if self._what is not None and self._what != 1000:
             self._state = self._what
@@ -493,10 +479,8 @@ class OWNLightingEvent(OWNEvent):
                     seconds=int(self._dimension_value[2]),
                 )
                 self._human_readable_log = f"Light/motion sensor {self._where}{self._interface_log_text} has timeout set to {self._motion_timeout}."  # pylint: disable=line-too-long
-            elif self._dimension_value is not None:
+            elif self._dimension_value:
                 self._human_readable_log = f"Light/motion sensor {self._where}{self._interface_log_text} has sent an unknown dimension {self._dimension}."
-            else:
-                pass
 
     @property
     def message_type(self):
@@ -543,7 +527,7 @@ class OWNLightingEvent(OWNEvent):
         return self._pir_sensitivity
 
     @property
-    def motion_timeout(self) -> datetime.timedelta:
+    def motion_timeout(self) -> datetime.timedelta | None:
         return self._motion_timeout
 
 
@@ -934,24 +918,24 @@ class OWNHeatingEvent(OWNEvent):
         return self._zone
 
     @property
-    def mode(self) -> str:
+    def mode(self) -> str | None:
         return self._mode_name
 
-    def is_active(self) -> bool:
+    def is_active(self) -> bool | None:
         return self._is_active
 
-    def is_heating(self) -> bool:
+    def is_heating(self) -> bool | None:
         return self._is_heating
 
-    def is_cooling(self) -> bool:
+    def is_cooling(self) -> bool | None:
         return self._is_cooling
 
     @property
-    def main_temperature(self) -> float:
+    def main_temperature(self) -> float | None:
         return self._measured_temperature
 
     @property
-    def main_humidity(self) -> float:
+    def main_humidity(self) -> float | None:
         return self._measured_humidity
 
     @property
@@ -959,15 +943,15 @@ class OWNHeatingEvent(OWNEvent):
         return [self._sensor, self._secondary_temperature]
 
     @property
-    def set_temperature(self) -> float:
+    def set_temperature(self) -> float | None:
         return self._set_temperature
 
     @property
-    def local_offset(self) -> int:
+    def local_offset(self) -> int | None:
         return self._local_offset
 
     @property
-    def local_set_temperature(self) -> float:
+    def local_set_temperature(self) -> float | None:
         return self._local_set_temperature
 
 
@@ -977,10 +961,11 @@ class OWNAlarmEvent(OWNEvent):
 
         # Dimension replies carry no WHAT: never crash the constructor on it.
         self._state_code = int(self._what) if self._what is not None else -1
-        self._state = None
+        self._state: str | None = None
         self._system = False
-        self._zone = None
-        self._sensor = None
+        # Zone may be a letter ("c", "f"), a number, or None (system-wide).
+        self._zone: str | int | None = None
+        self._sensor: int | None = None
 
         if self._where == "*":
             self._system = True
@@ -1290,10 +1275,7 @@ class OWNCENEvent(OWNEvent):
     def __init__(self, data):
         super().__init__(data)
 
-        try:
-            self._state = self._what_param[0]
-        except IndexError:
-            self._state = None
+        self._state: str | None = self._what_param[0] if self._what_param else None
         self.push_button = self._what
         self.object = self._where
 
@@ -1312,15 +1294,15 @@ class OWNCENEvent(OWNEvent):
 
     @property
     def is_held(self):
-        return int(self._state) == 3
+        return self._state is not None and int(self._state) == 3
 
     @property
     def is_released_after_short_press(self):
-        return int(self._state) == 1
+        return self._state is not None and int(self._state) == 1
 
     @property
     def is_released_after_long_press(self):
-        return int(self._state) == 2
+        return self._state is not None and int(self._state) == 2
 
 
 class OWNSceneEvent(OWNEvent):
@@ -1375,14 +1357,15 @@ class OWNEnergyEvent(OWNEvent):
         if not self._where.startswith("5") and not self._where.startswith("7"):
             return
 
-        self._type = None
+        self._type: str | None = None
         self._sensor = self._where[1:]
         self._active_power = 0
         self._total_consumption = 0
-        self._hourly_consumption = {}
-        self._daily_consumption = {}
+        # Values are heterogeneous: dates, hours (int) and Wh readings (int).
+        self._hourly_consumption: dict[str, Any] = {}
+        self._daily_consumption: dict[str, Any] = {}
         self._current_day_partial_consumption = 0
-        self._monthly_consumption = {}
+        self._monthly_consumption: dict[str, Any] = {}
         self._current_month_partial_consumption = 0
 
         if self._dimension is not None:
@@ -1798,27 +1781,30 @@ class OWNHeatingCommand(OWNCommand):
     @classmethod
     def set_mode(cls, where, mode: str, standalone=False):
         central_local = re.compile(r"^#0#\d+$")
+        zone: str
         if central_local.match(str(where)):
             zone = where
             zone_name = f"zone {int(where.split('#')[-1])}"
         else:
-            zone = int(where.split("#")[-1]) if where.startswith("#") else int(where)
-            zone_name = f"zone {zone}" if zone > 0 else "general"
+            zone_number = (
+                int(where.split("#")[-1]) if where.startswith("#") else int(where)
+            )
+            zone_name = f"zone {zone_number}" if zone_number > 0 else "general"
 
             if standalone:
-                zone = f"#{zone}" if zone == 0 else str(zone)
+                zone = f"#{zone_number}" if zone_number == 0 else str(zone_number)
             else:
-                zone = f"#{zone}"
+                zone = f"#{zone_number}"
 
         mode_name = mode
         if mode == CLIMATE_MODE_OFF:
-            mode = 303
+            mode_code = 303
         elif mode == CLIMATE_MODE_AUTO:
-            mode = 311
+            mode_code = 311
         else:
             return None
 
-        message = cls(f"*4*{mode}*{zone}##")
+        message = cls(f"*4*{mode_code}*{zone}##")
         message._human_readable_log = f"Setting {zone_name} mode to '{mode_name}'."
         return message
 
@@ -1829,17 +1815,20 @@ class OWNHeatingCommand(OWNCommand):
     @classmethod
     def set_temperature(cls, where, temperature: float, mode: str, standalone=False):
         central_local = re.compile(r"^#0#\d+$")
+        zone: str
         if central_local.match(str(where)):
             zone = where
             zone_name = f"zone {int(where.split('#')[-1])}"
         else:
-            zone = int(where.split("#")[-1]) if where.startswith("#") else int(where)
-            zone_name = f"zone {zone}" if zone > 0 else "general"
+            zone_number = (
+                int(where.split("#")[-1]) if where.startswith("#") else int(where)
+            )
+            zone_name = f"zone {zone_number}" if zone_number > 0 else "general"
 
             if standalone:
-                zone = f"#{zone}" if zone == 0 else str(zone)
+                zone = f"#{zone_number}" if zone_number == 0 else str(zone_number)
             else:
-                zone = f"#{zone}"
+                zone = f"#{zone_number}"
 
         temperature = round(temperature * 2) / 2
         if temperature < 5.0:
@@ -1847,17 +1836,16 @@ class OWNHeatingCommand(OWNCommand):
         elif temperature > 40.0:
             temperature = 40.0
         temperature_print = f"{temperature}"
-        temperature = int(temperature * 10)
+        temperature_code = int(temperature * 10)
 
         mode_name = mode
+        mode_code = 3
         if mode == CLIMATE_MODE_HEAT:
-            mode = 1
+            mode_code = 1
         elif mode == CLIMATE_MODE_COOL:
-            mode = 2
-        elif mode == CLIMATE_MODE_AUTO:
-            mode = 3
+            mode_code = 2
 
-        message = cls(f"*#4*{zone}*#14*{temperature:04d}*{mode}##")
+        message = cls(f"*#4*{zone}*#14*{temperature_code:04d}*{mode_code}##")
         message._human_readable_log = (
             f"Setting {zone_name} to {temperature_print}°C in mode '{mode_name}'."
         )
@@ -1902,7 +1890,10 @@ class OWNGatewayCommand(OWNCommand):
         self._date = None
         self._datetime = None
 
-        if self._dimension == 0:
+        # NB: the length guards matter — a dimension REQUEST (e.g. `*#13**0##`,
+        # the "gateway time" query) matches the same dimension numbers as a
+        # WRITING but carries no values at all.
+        if self._dimension == 0 and len(self._dimension_value) > 3:
             self._hour = self._dimension_value[0]
             self._minute = self._dimension_value[1]
             self._second = self._dimension_value[2]
@@ -1922,7 +1913,7 @@ class OWNGatewayCommand(OWNCommand):
                 f"Gateway broadcasting internal time: {self._time}."
             )
 
-        elif self._dimension == 1:
+        elif self._dimension == 1 and len(self._dimension_value) > 3:
             self._year = self._dimension_value[3]
             self._month = self._dimension_value[2]
             self._day = self._dimension_value[1]
@@ -1933,7 +1924,7 @@ class OWNGatewayCommand(OWNCommand):
                 f"Gateway broadcasting internal date: {self._date}."
             )
 
-        elif self._dimension == 22:
+        elif self._dimension == 22 and len(self._dimension_value) > 7:
             self._hour = self._dimension_value[0]
             self._minute = self._dimension_value[1]
             self._second = self._dimension_value[2]
@@ -2086,7 +2077,8 @@ class OWNSignaling(OWNMessage):
 
     def __init__(self, data):  # pylint: disable=super-init-not-called
         self._raw = data
-        self._family = None
+        self._family = ""
+        self._match: re.Match[str] | None = None
         self._type = "UNKNOWN"
         self._human_readable_log = data
 
@@ -2128,14 +2120,14 @@ class OWNSignaling(OWNMessage):
         """Return the authentication nonce IF the message is a nonce message"""
         # NB: is_nonce is a method — referencing it without calling it was
         # always truthy, making this guard ineffective.
-        if self.is_nonce():
+        if self.is_nonce() and self._match is not None:
             return self._match.group(1)
         return None
 
     @property
     def sha_version(self):
         """Return the authentication SHA version IF the message is a SHA challenge message"""
-        if self.is_sha():
+        if self.is_sha() and self._match is not None:
             return self._match.group(1)
         return None
 

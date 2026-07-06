@@ -39,7 +39,7 @@ async def main(arguments: dict, connection: OWNEventSession) -> None:
     logger = (
         arguments["logger"]
         if "logger" in arguments and isinstance(arguments["logger"], logging.Logger)
-        else None
+        else logging.getLogger("OWNd")
     )
 
     logger.info("Starting discovery of a supported gateway via SSDP")
@@ -52,9 +52,7 @@ async def main(arguments: dict, connection: OWNEventSession) -> None:
         }
     )
     connection.gateway = gateway
-
-    if logger is not None:
-        connection.logger = logger
+    connection.logger = logger
 
     logger.info("Starting connection to the discovered gateway")
     await connection.connect()

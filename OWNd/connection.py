@@ -87,7 +87,7 @@ class OWNGateway:
         self._log_id = f"[{self.model_name} gateway - {self.host}]"
 
     @property
-    def unique_id(self) -> str:
+    def unique_id(self) -> str | None:
         return self.serial_number
 
     @unique_id.setter
@@ -95,7 +95,7 @@ class OWNGateway:
         self.serial_number = unique_id
 
     @property
-    def host(self) -> str:
+    def host(self) -> str | None:
         return self.address
 
     @host.setter
@@ -103,7 +103,7 @@ class OWNGateway:
         self.address = host
 
     @property
-    def firmware(self) -> str:
+    def firmware(self) -> str | None:
         return self.model_number
 
     @firmware.setter
@@ -111,7 +111,7 @@ class OWNGateway:
         self.model_number = firmware
 
     @property
-    def serial(self) -> str:
+    def serial(self) -> str | None:
         return self.serial_number
 
     @serial.setter
@@ -119,7 +119,7 @@ class OWNGateway:
         self.serial_number = serial
 
     @property
-    def password(self) -> str:
+    def password(self) -> str | None:
         return self._password
 
     @password.setter
@@ -135,7 +135,7 @@ class OWNGateway:
         self._log_id = value
 
     @classmethod
-    async def get_first_available_gateway(cls, password: str = None):
+    async def get_first_available_gateway(cls, password: str | None = None):
         local_gateways = await find_gateways()
         if not local_gateways:
             return None
@@ -221,6 +221,13 @@ class OWNSession:
         """True once a session has been negotiated and not since lost."""
         return self._connected
 
+    @property
+    def _log_id(self) -> str:
+        """Log prefix; safe also on a session created without a gateway."""
+        # NB: must go through the *gateway*'s log_id — returning self._log_id
+        # here would recurse into this very property.
+        return self._gateway.log_id if self._gateway is not None else "[no gateway]"
+
     def _set_connected(self, value: bool) -> None:
         """Update connection state and notify the consumer on transitions only."""
         if value == self._connected:
@@ -232,7 +239,7 @@ class OWNSession:
             except Exception:  # noqa: BLE001 - consumer callback must not break us
                 if self._logger is not None:
                     self._logger.exception(
-                        "%s on_state_change callback raised.", self._gateway.log_id
+                        "%s on_state_change callback raised.", self._log_id
                     )
 
     def _apply_tcp_keepalive(self) -> None:
@@ -265,7 +272,7 @@ class OWNSession:
             self._logger.debug(
                 "%s TCP keepalive enabled on event socket "
                 "(idle=%ss, intvl=%ss, cnt=%s).",
-                self._gateway.log_id,
+                self._log_id,
                 TCP_KEEPALIVE_IDLE,
                 TCP_KEEPALIVE_INTVL,
                 TCP_KEEPALIVE_CNT,
@@ -273,7 +280,7 @@ class OWNSession:
         except OSError as err:
             self._logger.warning(
                 "%s Could not enable TCP keepalive (%s); continuing without it.",
-                self._gateway.log_id,
+                self._log_id,
                 err,
             )
 
@@ -285,6 +292,9 @@ class OWNSession:
         acknowledgements can never block the event loop indefinitely. The event
         listener passes ``None`` on purpose, as bus silence is expected there.
         """
+        # Programming-error guard (and mypy narrowing): callers must have an
+        # open connection before reading frames.
+        assert self._stream_reader is not None
         reader = self._stream_reader.readuntil(OWNSession.SEPARATOR)
         if timeout is not None:
             raw_response = await asyncio.wait_for(reader, timeout=timeout)
@@ -293,7 +303,7 @@ class OWNSession:
         return raw_response.decode()
 
     @property
-    def gateway(self) -> OWNGateway:
+    def gateway(self) -> OWNGateway | None:
         return self._gateway
 
     @gateway.setter
@@ -322,6 +332,7 @@ class OWNSession:
         return await connection.test_connection()
 
     async def test_connection(self) -> dict:
+        assert self._gateway is not None
         retry_count = 0
         retry_timer = 1
 
@@ -330,7 +341,7 @@ class OWNSession:
                 if retry_count > 2:
                     self._logger.error(
                         "%s Test session connection still refused after 3 attempts.",
-                        self._gateway.log_id,
+                        self._log_id,
                     )
                     return {"Success": False, "Message": "connection_error"}
                 (
@@ -346,7 +357,7 @@ class OWNSession:
             except (ConnectionRefusedError, TimeoutError, OSError) as error:
                 self._logger.warning(
                     "%s Test session connection failed (%s), retrying in %ss.",
-                    self._gateway.log_id,
+                    self._log_id,
                     error,
                     retry_timer,
                 )
@@ -360,7 +371,7 @@ class OWNSession:
         except ConnectionResetError:
             self._logger.error(
                 "%s Negotiation reset while opening %s session. Wait 60 seconds before retrying.",
-                self._gateway.log_id,
+                self._log_id,
                 self._type,
             )
             return {"Success": False, "Message": "password_retry"}
@@ -371,7 +382,7 @@ class OWNSession:
             # of letting the exception propagate and crash the caller's setup.
             self._logger.warning(
                 "%s Negotiation failed while opening %s session (%s).",
-                self._gateway.log_id,
+                self._log_id,
                 self._type,
                 error,
             )
@@ -380,7 +391,8 @@ class OWNSession:
         return result
 
     async def connect(self):
-        self._logger.debug("%s Opening %s session.", self._gateway.log_id, self._type)
+        assert self._gateway is not None
+        self._logger.debug("%s Opening %s session.", self._log_id, self._type)
 
         retry_count = 0
 
@@ -403,7 +415,7 @@ class OWNSession:
                 if result.get("Message") in _FATAL_NEGOTIATION_ERRORS:
                     self._logger.error(
                         "%s %s session negotiation failed (%s); giving up.",
-                        self._gateway.log_id,
+                        self._log_id,
                         self._type.capitalize(),
                         result.get("Message"),
                     )
@@ -439,7 +451,7 @@ class OWNSession:
                 self._logger.warning(
                     "%s %s session could not be established after %d attempts; "
                     "will retry.",
-                    self._gateway.log_id,
+                    self._log_id,
                     self._type.capitalize(),
                     MAX_CONNECT_ATTEMPTS,
                 )
@@ -447,7 +459,7 @@ class OWNSession:
                 return None
             self._logger.warning(
                 "%s %s session: %s. Retrying in %ss (attempt %d/%d).",
-                self._gateway.log_id,
+                self._log_id,
                 self._type.capitalize(),
                 reason,
                 wait,
@@ -483,16 +495,22 @@ class OWNSession:
         self._stream_writer = None
         if self._gateway is not None:
             self._logger.debug(
-                "%s %s session closed.", self._gateway.log_id, self._type.capitalize()
+                "%s %s session closed.", self._log_id, self._type.capitalize()
             )
 
     async def _negotiate(self) -> dict:
+        # Programming-error guards (and mypy narrowing): negotiation is only
+        # ever entered right after a successful open_connection() on a
+        # session bound to a gateway.
+        assert self._gateway is not None
+        assert self._stream_reader is not None and self._stream_writer is not None
+
         type_id = 0 if self._type == "command" else 1
         error = False
         error_message = None
 
         self._logger.debug(
-            "%s Negotiating %s session.", self._gateway.log_id, self._type
+            "%s Negotiating %s session.", self._log_id, self._type
         )
 
         try:
@@ -504,13 +522,15 @@ class OWNSession:
             )
 
             if resulting_message.is_nack():
+                # Return right away: reading further frames after a refusal
+                # only waits out NEGOTIATION_TIMEOUT and masks the real cause
+                # with "negotiation_timeout".
                 self._logger.error(
                     "%s Error while opening %s session.",
-                    self._gateway.log_id,
+                    self._log_id,
                     self._type,
                 )
-                error = True
-                error_message = "connection_refused"
+                return {"Success": False, "Message": "connection_refused"}
 
             resulting_message = OWNSignaling(
                 await self._read_frame(NEGOTIATION_TIMEOUT)
@@ -519,17 +539,17 @@ class OWNSession:
                 error = True
                 error_message = "negotiation_refused"
                 self._logger.debug(
-                    "%s Reply: `%s`", self._gateway.log_id, resulting_message
+                    "%s Reply: `%s`", self._log_id, resulting_message
                 )
                 self._logger.error(
                     "%s Error while opening %s session.",
-                    self._gateway.log_id,
+                    self._log_id,
                     self._type,
                 )
             elif resulting_message.is_sha():
                 self._logger.debug(
                     "%s Received SHA challenge: `%s`",
-                    self._gateway.log_id,
+                    self._log_id,
                     resulting_message,
                 )
                 if self._gateway.password is None:
@@ -537,7 +557,7 @@ class OWNSession:
                     error_message = "password_required"
                     self._logger.warning(
                         "%s Connection requires a password but none was provided.",
-                        self._gateway.log_id,
+                        self._log_id,
                     )
                     self._stream_writer.write(b"*#*0##")
                     await self._stream_writer.drain()
@@ -549,7 +569,7 @@ class OWNSession:
                         method = "sha256"
                     self._logger.debug(
                         "%s Accepting %s challenge, initiating handshake.",
-                        self._gateway.log_id,
+                        self._log_id,
                         method,
                     )
                     self._stream_writer.write(b"*#*1##")
@@ -567,7 +587,7 @@ class OWNSession:
                         hashed_password = f"*#{client_random_string_rb}*{self._encode_hmac_password(method=method, password=self._gateway.password, nonce_a=server_random_string_ra, nonce_b=client_random_string_rb)}##"  # pylint: disable=line-too-long
                         self._logger.debug(
                             "%s Sending %s session password.",
-                            self._gateway.log_id,
+                            self._log_id,
                             self._type,
                         )
                         self._stream_writer.write(hashed_password.encode())
@@ -580,7 +600,7 @@ class OWNSession:
                             error_message = "password_error"
                             self._logger.error(
                                 "%s Password error while opening %s session.",
-                                self._gateway.log_id,
+                                self._log_id,
                                 self._type,
                             )
                         elif resulting_message.is_nonce():
@@ -600,12 +620,12 @@ class OWNSession:
                                 await self._stream_writer.drain()
                                 self._logger.debug(
                                     "%s Session established successfully.",
-                                    self._gateway.log_id,
+                                    self._log_id,
                                 )
                             else:
                                 self._logger.error(
                                     "%s Server identity could not be confirmed.",
-                                    self._gateway.log_id,
+                                    self._log_id,
                                 )
                                 self._stream_writer.write(b"*#*0##")
                                 await self._stream_writer.drain()
@@ -613,18 +633,18 @@ class OWNSession:
                                 error_message = "negotiation_error"
                                 self._logger.error(
                                     "%s Error while opening %s session: HMAC authentication failed.",
-                                    self._gateway.log_id,
+                                    self._log_id,
                                     self._type,
                                 )
             elif resulting_message.is_nonce():
                 self._logger.debug(
-                    "%s Received nonce: `%s`", self._gateway.log_id, resulting_message
+                    "%s Received nonce: `%s`", self._log_id, resulting_message
                 )
                 if self._gateway.password is not None:
                     hashed_password = f"*#{self._get_own_password(self._gateway.password, resulting_message.nonce)}##"  # pylint: disable=line-too-long
                     self._logger.debug(
                         "%s Sending %s session password.",
-                        self._gateway.log_id,
+                        self._log_id,
                         self._type,
                     )
                     self._stream_writer.write(hashed_password.encode())
@@ -637,13 +657,13 @@ class OWNSession:
                         error_message = "password_error"
                         self._logger.error(
                             "%s Password error while opening %s session.",
-                            self._gateway.log_id,
+                            self._log_id,
                             self._type,
                         )
                     elif resulting_message.is_ack():
                         self._logger.debug(
                             "%s %s session established successfully.",
-                            self._gateway.log_id,
+                            self._log_id,
                             self._type.capitalize(),
                         )
                 else:
@@ -651,13 +671,13 @@ class OWNSession:
                     error_message = "password_error"
                     self._logger.error(
                         "%s Connection requires a password but none was provided for %s session.",
-                        self._gateway.log_id,
+                        self._log_id,
                         self._type,
                     )
             elif resulting_message.is_ack():
                 self._logger.debug(
                     "%s %s session established successfully.",
-                    self._gateway.log_id,
+                    self._log_id,
                     self._type.capitalize(),
                 )
             else:
@@ -665,7 +685,7 @@ class OWNSession:
                 error_message = "negotiation_failed"
                 self._logger.debug(
                     "%s Unexpected message during negotiation: %s",
-                    self._gateway.log_id,
+                    self._log_id,
                     resulting_message,
                 )
         except TimeoutError:
@@ -673,7 +693,7 @@ class OWNSession:
             error_message = "negotiation_timeout"
             self._logger.error(
                 "%s Timed out negotiating %s session.",
-                self._gateway.log_id,
+                self._log_id,
                 self._type,
             )
         except asyncio.IncompleteReadError:
@@ -687,7 +707,7 @@ class OWNSession:
             self._logger.warning(
                 "%s Connection closed by the gateway while negotiating %s "
                 "session (busy or out of session slots?); will retry.",
-                self._gateway.log_id,
+                self._log_id,
                 self._type,
             )
 
@@ -852,7 +872,7 @@ class OWNEventSession(OWNSession):
             # No live connection (e.g. a previous reconnect attempt gave up).
             self._logger.warning(
                 "%s Event session not connected, reconnecting...",
-                self._gateway.log_id,
+                self._log_id,
             )
             result = await self._reconnect()
             if self._stream_reader is None:
@@ -869,7 +889,7 @@ class OWNEventSession(OWNSession):
                 )
                 self._logger.warning(
                     "%s Reconnection failed; next attempt in %ss.",
-                    self._gateway.log_id,
+                    self._log_id,
                     pause,
                 )
                 await asyncio.sleep(pause)
@@ -883,7 +903,7 @@ class OWNEventSession(OWNSession):
         except TimeoutError:
             self._logger.warning(
                 "%s No bus traffic for %ss; assuming stale connection, reconnecting...",
-                self._gateway.log_id,
+                self._log_id,
                 self._inactivity_timeout,
             )
             await self._reconnect()
@@ -897,13 +917,13 @@ class OWNEventSession(OWNSession):
             # Covers EOF, RST (ConnectionResetError), aborted connections,
             # over-long frames and other socket errors: reconnect in all cases.
             self._logger.warning(
-                "%s Event connection lost, reconnecting...", self._gateway.log_id
+                "%s Event connection lost, reconnecting...", self._log_id
             )
             await self._reconnect()
             return None
         except Exception:  # pylint: disable=broad-except
             self._logger.exception(
-                "%s Event session crashed, reconnecting...", self._gateway.log_id
+                "%s Event session crashed, reconnecting...", self._log_id
             )
             await self._reconnect()
             return None
@@ -918,7 +938,7 @@ class OWNEventSession(OWNSession):
         except Exception:  # pylint: disable=broad-except
             self._logger.exception(
                 "%s Could not parse frame %r; skipping it.",
-                self._gateway.log_id,
+                self._log_id,
                 data,
             )
             return None
@@ -964,7 +984,7 @@ class OWNCommandSession(OWNSession):
             await self.send(KEEPALIVE_FRAME, is_status_request=True)
             return True
         except Exception:  # pylint: disable=broad-except
-            self._logger.exception("%s Keepalive failed.", self._gateway.log_id)
+            self._logger.exception("%s Keepalive failed.", self._log_id)
             return False
 
     async def run_keepalive(
@@ -973,7 +993,7 @@ class OWNCommandSession(OWNSession):
         """Background loop: ping the gateway every ``interval`` seconds until
         ``stop_event`` is set. Meant to be launched as an asyncio task."""
         self._logger.info(
-            "%s Keepalive started (every %ss).", self._gateway.log_id, interval
+            "%s Keepalive started (every %ss).", self._log_id, interval
         )
         while not stop_event.is_set():
             try:
@@ -982,7 +1002,7 @@ class OWNCommandSession(OWNSession):
                 ok = await self.keepalive()
                 self._logger.debug(
                     "%s Keepalive %s.",
-                    self._gateway.log_id,
+                    self._log_id,
                     "ok" if ok else "FAILED",
                 )
 
@@ -1001,7 +1021,7 @@ class OWNCommandSession(OWNSession):
                 return resulting_message
             self._logger.debug(
                 "%s Skipping non-signaling response `%s`.",
-                self._gateway.log_id,
+                self._log_id,
                 resulting_message,
             )
 
@@ -1035,7 +1055,7 @@ class OWNCommandSession(OWNSession):
                 # worker; the next command will try to reconnect again.
                 self._logger.warning(
                     "%s Command session unavailable; message `%s` not sent.",
-                    self._gateway.log_id,
+                    self._log_id,
                     message,
                 )
                 return
@@ -1049,23 +1069,23 @@ class OWNCommandSession(OWNSession):
                 if resulting_message.is_ack():
                     log_message = "%s Message `%s` was successfully sent."
                     if not is_status_request:
-                        self._logger.info(log_message, self._gateway.log_id, message)
+                        self._logger.info(log_message, self._log_id, message)
                     else:
-                        self._logger.debug(log_message, self._gateway.log_id, message)
+                        self._logger.debug(log_message, self._log_id, message)
                     return
 
                 if resulting_message.is_nack():
                     if attempt < max_attempts:
                         self._logger.error(
                             "%s Could not send message `%s`. Retrying (%d)...",
-                            self._gateway.log_id,
+                            self._log_id,
                             message,
                             attempt,
                         )
                         continue
                     self._logger.error(
                         "%s Could not send message `%s`. No more retries.",
-                        self._gateway.log_id,
+                        self._log_id,
                         message,
                     )
                     return
@@ -1073,7 +1093,7 @@ class OWNCommandSession(OWNSession):
                 # Any other signaling message is unexpected here: stop.
                 self._logger.warning(
                     "%s Unexpected response `%s` to message `%s`.",
-                    self._gateway.log_id,
+                    self._log_id,
                     resulting_message,
                     message,
                 )
@@ -1082,7 +1102,7 @@ class OWNCommandSession(OWNSession):
             except (ConnectionResetError, asyncio.IncompleteReadError, OSError):
                 self._logger.debug(
                     "%s Command session connection reset, reconnecting (%d)...",
-                    self._gateway.log_id,
+                    self._log_id,
                     attempt,
                 )
                 await self._reconnect()
@@ -1090,7 +1110,7 @@ class OWNCommandSession(OWNSession):
             except TimeoutError:
                 self._logger.warning(
                     "%s Timed out awaiting acknowledgement for `%s`, reconnecting (%d)...",
-                    self._gateway.log_id,
+                    self._log_id,
                     message,
                     attempt,
                 )
@@ -1098,13 +1118,13 @@ class OWNCommandSession(OWNSession):
                 continue
             except Exception:  # pylint: disable=broad-except
                 self._logger.exception(
-                    "%s Command session crashed.", self._gateway.log_id
+                    "%s Command session crashed.", self._log_id
                 )
                 return
 
         self._logger.error(
             "%s Could not send message `%s` after %d attempts.",
-            self._gateway.log_id,
+            self._log_id,
             message,
             max_attempts,
         )

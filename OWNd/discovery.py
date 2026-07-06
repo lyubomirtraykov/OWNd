@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 import email.parser
 import socket
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
+from typing import Any
 from urllib.parse import urlparse
 from xml.parsers.expat import ExpatError
 
@@ -56,7 +57,7 @@ class SSDPMessage:
 
         self.version = version
         self.headers = list(headers)
-        self.headers_dictionary = {}
+        self.headers_dictionary: dict[str, str] = {}
         for header in self.headers:
             self.headers_dictionary.setdefault(header[0], header[1])
 
@@ -274,7 +275,7 @@ async def get_port(
 
         port = _node_text(soap_response, "Port")
         return int(port) if port is not None else DEFAULT_PORT
-    except (aiohttp.ClientError, ExpatError, IndexError, ValueError, TimeoutError, asyncio.TimeoutError):
+    except (aiohttp.ClientError, ExpatError, IndexError, ValueError, TimeoutError):
         # Unreachable gateway, HTTP error page, malformed/missing XML, timeout:
         # fall back to the default port instead of crashing discovery.
         return DEFAULT_PORT
@@ -284,7 +285,7 @@ async def _get_scpd_details(
     scpd_location: str, session: aiohttp.ClientSession | None = None
 ) -> dict:
 
-    discovery_info = {}
+    discovery_info: dict[str, Any] = {}
 
     async with _client_session(session) as http_session:
         scpd_response = await http_session.get(
@@ -317,8 +318,8 @@ async def find_gateways(session: aiohttp.ClientSession | None = None) -> list[di
 
     # Start the asyncio loop.
     loop = asyncio.get_running_loop()
-    recvq = asyncio.Queue()
-    excq = asyncio.Queue()
+    recvq: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+    excq: asyncio.Queue[Exception] = asyncio.Queue()
 
     search_request = bytes(
         SSDPRequest(
@@ -347,12 +348,21 @@ async def find_gateways(session: aiohttp.ClientSession | None = None) -> list[di
 
     while not recvq.empty():
         discovery_info = await recvq.get()
-        try:
+        # SCPD details are best-effort: a gateway that fails here is still
+        # returned with the bare SSDP info.
+        with suppress(
+            aiohttp.ClientError,
+            ExpatError,
+            IndexError,
+            ValueError,
+            TimeoutError,
+            asyncio.TimeoutError,
+        ):
             discovery_info.update(
-                await _get_scpd_details(discovery_info["ssdp_location"], session=session)
+                await _get_scpd_details(
+                    discovery_info["ssdp_location"], session=session
+                )
             )
-        except (aiohttp.ClientError, ExpatError, IndexError, ValueError, TimeoutError, asyncio.TimeoutError):
-            pass
 
         return_list.append(discovery_info)
 
