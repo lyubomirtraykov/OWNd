@@ -63,6 +63,15 @@ RECONNECT_PAUSE = 10
 RECONNECT_PAUSE_FATAL = 60
 
 
+def _first_scalar(value, default=None):
+    """Return a scalar from legacy tuple/list discovery values."""
+    while isinstance(value, (list, tuple)):
+        if not value:
+            return default
+        value = value[0]
+    return default if value is None else value
+
+
 class OWNGateway:
     def __init__(self, discovery_info: dict):
         # Attributes potentially provided by user
@@ -74,7 +83,9 @@ class OWNGateway:
         # Attributes retrieved from UPnP device description
         self.device_type = discovery_info.get("deviceType")
         self.friendly_name = discovery_info.get("friendlyName")
-        self.manufacturer = discovery_info.get("manufacturer", "BTicino S.p.A.")
+        self.manufacturer = _first_scalar(
+            discovery_info.get("manufacturer"), "BTicino S.p.A."
+        )
         self.manufacturer_url = discovery_info.get("manufacturerURL")
         self.model_name = discovery_info.get("modelName", "Unknown model")
         self.model_number = discovery_info.get("modelNumber")

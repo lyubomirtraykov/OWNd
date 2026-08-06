@@ -35,6 +35,13 @@ CLIMATE_MODE_HEAT = "heat"
 CLIMATE_MODE_COOL = "cool"
 CLIMATE_MODE_AUTO = "auto"
 
+LOCAL_CONTROL_NORMAL = "normal"
+LOCAL_CONTROL_OFFSET = "offset"
+LOCAL_CONTROL_OFF = "local_off"
+LOCAL_CONTROL_PROTECTION = "local_protection"
+LOCAL_CONTROL_OVERRIDE = "local_override"
+LOCAL_CONTROL_UNKNOWN = "unknown"
+
 PIR_SENSITIVITY_MAPPING = ["low", "medium", "high", "very high"]
 
 
@@ -638,6 +645,8 @@ class OWNHeatingEvent(OWNEvent):
         self._mode_name = None
         self._set_temperature = None
         self._local_offset = None
+        self._local_offset_raw = None
+        self._local_control_state = None
         self._local_set_temperature = None
         self._measured_temperature = None
         self._secondary_temperature = None
@@ -762,25 +771,30 @@ class OWNHeatingEvent(OWNEvent):
 
         elif self._dimension == 13:  # Local offset
             self._type = MESSAGE_TYPE_LOCAL_OFFSET
-            if (
-                self._dimension_value[0] == "0"
-                or self._dimension_value[0] == "00"
-                or self._dimension_value[0] == "4"
-                or self._dimension_value[0] == "5"
-                or self._dimension_value[0] == "6"
-                or self._dimension_value[0] == "7"
-                or self._dimension_value[0] == "8"
-            ):
+            self._local_offset_raw = self._dimension_value[0]
+            if self._local_offset_raw in ("0", "00"):
                 self._local_offset = 0
-            elif self._dimension_value[0].startswith("0") and len(self._dimension_value[0]) > 1:
-                self._local_offset = int(f"{self._dimension_value[0][1:]}")
-            elif len(self._dimension_value[0]) > 1:
-                self._local_offset = -int(f"{self._dimension_value[0][1:]}")
+                self._local_control_state = LOCAL_CONTROL_NORMAL
+            elif self._local_offset_raw in ("01", "02", "03"):
+                self._local_offset = int(self._local_offset_raw[1:])
+                self._local_control_state = LOCAL_CONTROL_OFFSET
+            elif self._local_offset_raw in ("11", "12", "13"):
+                self._local_offset = -int(self._local_offset_raw[1:])
+                self._local_control_state = LOCAL_CONTROL_OFFSET
+            elif self._local_offset_raw == "4":
+                self._local_control_state = LOCAL_CONTROL_OFF
+            elif self._local_offset_raw == "5":
+                self._local_control_state = LOCAL_CONTROL_PROTECTION
+            elif self._local_offset_raw == "6":
+                # Observed on 3550 systems when the local/manual override is active.
+                self._local_control_state = LOCAL_CONTROL_OVERRIDE
             else:
-                self._local_offset = 0
-            self._human_readable_log = (
-                f"Zone {self._zone}'s local offset is set to {self._local_offset}°C."
-            )
+                self._local_control_state = LOCAL_CONTROL_UNKNOWN
+
+            if self._local_offset is not None:
+                self._human_readable_log = f"Zone {self._zone}'s local offset is set to {self._local_offset}°C."
+            else:
+                self._human_readable_log = f"Zone {self._zone}'s local control state is '{self._local_control_state}' (raw value {self._local_offset_raw})."
 
         elif self._dimension == 14:  # Set temperature
             self._type = MESSAGE_TYPE_TARGET_TEMPERATURE
@@ -949,6 +963,14 @@ class OWNHeatingEvent(OWNEvent):
     @property
     def local_offset(self) -> int | None:
         return self._local_offset
+
+    @property
+    def local_offset_raw(self) -> str | None:
+        return self._local_offset_raw
+
+    @property
+    def local_control_state(self) -> str | None:
+        return self._local_control_state
 
     @property
     def local_set_temperature(self) -> float | None:
@@ -1770,6 +1792,12 @@ class OWNHeatingCommand(OWNCommand):
     def status(cls, where):
         message = cls(f"*#4*{where}##")
         message._human_readable_log = f"Requesting climate status update for {message._where}{message._interface_log_text}."
+        return message
+
+    @classmethod
+    def valves_status(cls, where):
+        message = cls(f"*#4*{where}*19##")
+        message._human_readable_log = f"Requesting climate valve status update for {message._where}{message._interface_log_text}."
         return message
 
     @classmethod
