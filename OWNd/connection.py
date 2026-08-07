@@ -23,7 +23,12 @@ from .message import OWNMessage, OWNSignaling
 # NOT bounded: long periods of silence on the bus are normal and must not
 # trigger spurious reconnections.
 NEGOTIATION_TIMEOUT = 10
+# The complete handshake may span several frames, but must still have one
+# absolute deadline and a hard frame budget.
+NEGOTIATION_TOTAL_TIMEOUT = 30
+NEGOTIATION_MAX_FRAMES = 4
 COMMAND_TIMEOUT = 10
+COMMAND_RESPONSE_MAX_FRAMES = 32
 # Bound the TCP connect itself, so a black-holed host (SYN accepted, never
 # completed) cannot hang the event loop for the OS-default TCP timeout.
 CONNECT_TIMEOUT = 10
@@ -377,29 +382,37 @@ class OWNSession:
                 retry_timer *= 2
 
         try:
-            result = await self._negotiate()
-            await self.close()
-        except ConnectionResetError:
-            self._logger.error(
-                "%s Negotiation reset while opening %s session. Wait 60 seconds before retrying.",
-                self._log_id,
-                self._type,
-            )
-            return {"Success": False, "Message": "password_retry"}
-        except (asyncio.IncompleteReadError, EOFError, TimeoutError, OSError) as error:
-            # The gateway accepted the TCP connection but closed it (or timed
-            # out) during negotiation: typical right after a reboot/power-cycle
-            # when it is not ready yet. Report a clean transient failure instead
-            # of letting the exception propagate and crash the caller's setup.
-            self._logger.warning(
-                "%s Negotiation failed while opening %s session (%s).",
-                self._log_id,
-                self._type,
-                error,
-            )
-            return {"Success": False, "Message": "connection_error"}
-
-        return result
+            try:
+                return await self._negotiate()
+            except ConnectionResetError:
+                self._logger.error(
+                    "%s Negotiation reset while opening %s session. Wait 60 seconds before retrying.",
+                    self._log_id,
+                    self._type,
+                )
+                return {"Success": False, "Message": "password_retry"}
+            except (
+                asyncio.IncompleteReadError,
+                EOFError,
+                TimeoutError,
+                OSError,
+            ) as error:
+                # The gateway accepted the TCP connection but closed it (or timed
+                # out) during negotiation: typical right after a reboot/power-cycle
+                # when it is not ready yet. Report a clean transient failure instead
+                # of letting the exception propagate and crash the caller's setup.
+                self._logger.warning(
+                    "%s Negotiation failed while opening %s session (%s).",
+                    self._log_id,
+                    self._type,
+                    error,
+                )
+                return {"Success": False, "Message": "connection_error"}
+        finally:
+            # Test sessions are always temporary. Release the descriptor on
+            # success, protocol rejection, transport failure and cancellation.
+            with contextlib.suppress(Exception):
+                await self.close()
 
     async def connect(self):
         assert self._gateway is not None
@@ -510,6 +523,21 @@ class OWNSession:
             )
 
     async def _negotiate(self) -> dict:
+        """Negotiate one session within an absolute deadline."""
+        try:
+            async with asyncio.timeout(NEGOTIATION_TOTAL_TIMEOUT):
+                return await self._negotiate_exchange()
+        except TimeoutError:
+            self._logger.error(
+                "%s Timed out negotiating %s session after %ss.",
+                self._log_id,
+                self._type,
+                NEGOTIATION_TOTAL_TIMEOUT,
+            )
+            return {"Success": False, "Message": "negotiation_timeout"}
+
+    async def _negotiate_exchange(self) -> dict:
+        """Perform the bounded frame exchange for session negotiation."""
         # Programming-error guards (and mypy narrowing): negotiation is only
         # ever entered right after a successful open_connection() on a
         # session bound to a gateway.
@@ -535,13 +563,22 @@ class OWNSession:
             "%s Negotiating %s session.", self._log_id, self._type
         )
 
+        frames_read = 0
+
+        async def read_signaling() -> OWNSignaling:
+            nonlocal frames_read
+            if frames_read >= NEGOTIATION_MAX_FRAMES:
+                raise TimeoutError(
+                    f"negotiation exceeded {NEGOTIATION_MAX_FRAMES} frames"
+                )
+            frames_read += 1
+            return OWNSignaling(await self._read_frame(NEGOTIATION_TIMEOUT))
+
         try:
             self._stream_writer.write(f"*99*{type_id}##".encode())
             await self._stream_writer.drain()
 
-            resulting_message = OWNSignaling(
-                await self._read_frame(NEGOTIATION_TIMEOUT)
-            )
+            resulting_message = await read_signaling()
 
             if resulting_message.is_nack():
                 # Return right away: reading further frames after a refusal
@@ -554,9 +591,7 @@ class OWNSession:
                 )
                 return {"Success": False, "Message": "connection_refused"}
 
-            resulting_message = OWNSignaling(
-                await self._read_frame(NEGOTIATION_TIMEOUT)
-            )
+            resulting_message = await read_signaling()
             if resulting_message.is_nack():
                 error = True
                 error_message = "negotiation_refused"
@@ -596,9 +631,7 @@ class OWNSession:
                     )
                     self._stream_writer.write(b"*#*1##")
                     await self._stream_writer.drain()
-                    resulting_message = OWNSignaling(
-                        await self._read_frame(NEGOTIATION_TIMEOUT)
-                    )
+                    resulting_message = await read_signaling()
                     if resulting_message.is_nonce():
                         server_random_string_ra = resulting_message.nonce
                         # Rb must be unpredictable: use a CSPRNG (not `random`).
@@ -614,9 +647,7 @@ class OWNSession:
                         )
                         self._stream_writer.write(hashed_password.encode())
                         await self._stream_writer.drain()
-                        resulting_message = OWNSignaling(
-                            await self._read_frame(NEGOTIATION_TIMEOUT)
-                        )
+                        resulting_message = await read_signaling()
                         if resulting_message.is_nack():
                             error = True
                             error_message = "password_error"
@@ -691,9 +722,7 @@ class OWNSession:
                     )
                     self._stream_writer.write(hashed_password.encode())
                     await self._stream_writer.drain()
-                    resulting_message = OWNSignaling(
-                        await self._read_frame(NEGOTIATION_TIMEOUT)
-                    )
+                    resulting_message = await read_signaling()
                     if resulting_message.is_nack():
                         error = True
                         error_message = "password_error"
@@ -906,7 +935,11 @@ class OWNEventSession(OWNSession):
     @classmethod
     async def connect_to_gateway(cls, gateway: OWNGateway):
         connection = cls(gateway)
-        await connection.connect()
+        try:
+            return await connection.connect()
+        finally:
+            with contextlib.suppress(Exception):
+                await connection.close()
 
     async def get_next(self) -> OWNMessage | str | None:
         """Acts as an entry point to read messages on the event bus.
@@ -1017,13 +1050,21 @@ class OWNCommandSession(OWNSession):
     @classmethod
     async def send_to_gateway(cls, message: str, gateway: OWNGateway):
         connection = cls(gateway)
-        await connection.connect()
-        await connection.send(message)
+        try:
+            await connection.connect()
+            await connection.send(message)
+        finally:
+            with contextlib.suppress(Exception):
+                await connection.close()
 
     @classmethod
     async def connect_to_gateway(cls, gateway: OWNGateway):
         connection = cls(gateway)
-        await connection.connect()
+        try:
+            return await connection.connect()
+        finally:
+            with contextlib.suppress(Exception):
+                await connection.close()
 
     async def keepalive(self) -> bool:
         """Send one harmless keepalive (gateway time request) on this command
@@ -1065,17 +1106,21 @@ class OWNCommandSession(OWNSession):
         acknowledgement are logged and skipped. Each read is bounded by
         ``COMMAND_TIMEOUT`` so a silent gateway cannot block the event loop.
         """
-        while True:
-            resulting_message = OWNMessage.parse(
-                await self._read_frame(COMMAND_TIMEOUT)
-            )
-            if isinstance(resulting_message, OWNSignaling):
-                return resulting_message
-            self._logger.debug(
-                "%s Skipping non-signaling response `%s`.",
-                self._log_id,
-                resulting_message,
-            )
+        async with asyncio.timeout(COMMAND_TIMEOUT):
+            for _ in range(COMMAND_RESPONSE_MAX_FRAMES):
+                resulting_message = OWNMessage.parse(
+                    await self._read_frame(COMMAND_TIMEOUT)
+                )
+                if isinstance(resulting_message, OWNSignaling):
+                    return resulting_message
+                self._logger.debug(
+                    "%s Skipping non-signaling response `%s`.",
+                    self._log_id,
+                    resulting_message,
+                )
+        raise TimeoutError(
+            f"no signaling response within {COMMAND_RESPONSE_MAX_FRAMES} frames"
+        )
 
     async def send(self, message, is_status_request: bool = False) -> None:
         """Send the attached message on an existing 'command' connection,

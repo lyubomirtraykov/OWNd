@@ -1376,9 +1376,6 @@ class OWNEnergyEvent(OWNEvent):
     def __init__(self, data):
         super().__init__(data)
 
-        if not self._where.startswith("5") and not self._where.startswith("7"):
-            return
-
         self._type: str | None = None
         self._sensor = self._where[1:]
         self._active_power = 0
@@ -1389,6 +1386,9 @@ class OWNEnergyEvent(OWNEvent):
         self._current_day_partial_consumption = 0
         self._monthly_consumption: dict[str, Any] = {}
         self._current_month_partial_consumption = 0
+
+        if not self._where.startswith("5") and not self._where.startswith("7"):
+            return
 
         if self._dimension is not None:
             if self._dimension == 113:
@@ -2025,9 +2025,7 @@ class OWNEnergyCommand(OWNCommand):
     def get_hourly_consumption(cls, where, date: datetime.date):
         where = f"{where}#0" if str(where).startswith("7") else str(where)
         today = datetime.date.today()
-        one_year_ago = datetime.date(
-            year=today.year - 1, month=today.month, day=today.day
-        )
+        one_year_ago = today - relativedelta(years=1)
         if date < one_year_ago:
             return None
         message = cls(f"*#18*{where}*511#{date.month}#{date.day}##")
