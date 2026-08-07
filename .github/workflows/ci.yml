@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+      - name: Install package and development dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e . ruff mypy types-python-dateutil types-defusedxml
+      - name: Run Ruff
+        run: ruff check OWNd tests setup.py
+      - name: Run mypy
+        run: mypy OWNd
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -v

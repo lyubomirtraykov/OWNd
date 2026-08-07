@@ -12,7 +12,7 @@ This package is an event listener and command forwarder for the OpenWebNet proto
 
 ---
 
-## Testing OWNd
+## Using OWNd
 
 Clone this repository and then execute:
 
@@ -34,3 +34,15 @@ To skip discovery and force connection to a specific gateway:
 python3 -m OWNd --address <IP_ADDRESS> --port <PORT> --password <PASSWORD> --mac <MAC_ADDRESS>
 ```
 *Note: Gateway configuration parameters can be retrieved using the BTicino Home+Project application.*
+
+## Development checks
+
+The same checks run by GitHub Actions can be executed locally from the repository root:
+
+```bash
+ruff check OWNd tests setup.py
+mypy OWNd
+python -m unittest discover -s tests -v
+```
+
+Current development status and pending validation work are tracked in [ROADMAP.md](ROADMAP.md).
