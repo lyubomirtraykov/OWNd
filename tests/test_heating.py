@@ -83,8 +83,8 @@ class CompatibilityTest(unittest.TestCase):
 
         self.assertEqual(gateway.manufacturer, "BTicino S.p.A.")
 
-    def test_runtime_version_matches_beta_package(self):
-        self.assertEqual(OWNd.__version__, "1.0.11b1")
+    def test_runtime_version_matches_package(self):
+        self.assertEqual(OWNd.__version__, "1.0.11")
 
 
 if __name__ == "__main__":
