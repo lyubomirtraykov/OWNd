@@ -19,5 +19,18 @@ MH201 di riferimento. La promozione stabile è coordinata con MyHOME 0.9.87.
 
 ## Pianificato per 1.0.12-beta
 
-- Rendere strettamente *fail-closed* la negoziazione autenticata: una risposta inattesa dopo l'invio della password deve chiudere la sessione invece di poter essere interpretata come successo. La modifica va sviluppata e validata in una beta separata, perché interessa direttamente l'accesso al gateway.
-- Ampliare la copertura dei parser solo quando sono disponibili frame reali e hardware su cui verificare il comportamento.
+La prima beta è una baseline versionata, operativamente identica alla stabile 1.0.11. I
+seguenti interventi verranno introdotti in iterazioni separate e coperte da test:
+
+- rendere strettamente *fail-closed* la negoziazione legacy e HMAC: una risposta inattesa
+  dopo l'invio della password deve chiudere la sessione, mai essere interpretata come
+  successo;
+- aggiungere un limite complessivo di tempo e frame alla lettura delle risposte di
+  segnalazione, oltre al timeout applicato oggi al singolo frame;
+- garantire il `close()` delle sessioni temporanee anche nei percorsi eccezionali dei
+  metodi helper e di `test_connection()`;
+- validare la password numerica con un errore controllato, evitando un `ValueError` grezzo;
+- completare l'inizializzazione difensiva degli eventi energia con WHERE non supportato e
+  gestire correttamente il calcolo annuale quando la data corrente è il 29 febbraio;
+- ampliare la copertura dei parser solo quando sono disponibili frame reali e hardware su
+  cui verificare il comportamento.
