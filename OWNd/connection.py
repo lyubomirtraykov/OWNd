@@ -516,6 +516,17 @@ class OWNSession:
         assert self._gateway is not None
         assert self._stream_reader is not None and self._stream_writer is not None
 
+        if self._gateway.password is not None and not (
+            isinstance(self._gateway.password, str)
+            and self._gateway.password.isascii()
+            and self._gateway.password.isdecimal()
+        ):
+            self._logger.error(
+                "%s Invalid OpenWebNet password: expected decimal digits only.",
+                self._log_id,
+            )
+            return {"Success": False, "Message": "password_error"}
+
         type_id = 0 if self._type == "command" else 1
         error = False
         error_message = None
@@ -647,6 +658,26 @@ class OWNSession:
                                     self._log_id,
                                     self._type,
                                 )
+                        else:
+                            error = True
+                            error_message = "negotiation_error"
+                            self._logger.error(
+                                "%s Unexpected response `%s` after sending the HMAC password; "
+                                "closing %s session.",
+                                self._log_id,
+                                resulting_message,
+                                self._type,
+                            )
+                    else:
+                        error = True
+                        error_message = "negotiation_error"
+                        self._logger.error(
+                            "%s Unexpected response `%s` after accepting the HMAC challenge; "
+                            "closing %s session.",
+                            self._log_id,
+                            resulting_message,
+                            self._type,
+                        )
             elif resulting_message.is_nonce():
                 self._logger.debug(
                     "%s Received nonce: `%s`", self._log_id, resulting_message
@@ -676,6 +707,16 @@ class OWNSession:
                             "%s %s session established successfully.",
                             self._log_id,
                             self._type.capitalize(),
+                        )
+                    else:
+                        error = True
+                        error_message = "negotiation_error"
+                        self._logger.error(
+                            "%s Unexpected response `%s` after sending the legacy password; "
+                            "closing %s session.",
+                            self._log_id,
+                            resulting_message,
+                            self._type,
                         )
                 else:
                     error = True
