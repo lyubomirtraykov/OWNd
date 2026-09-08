@@ -554,7 +554,7 @@ class OWNSession:
             )
             return {"Success": False, "Message": "password_error"}
         
-        if len(self._gateway.password) < 5 or len(self._gateway.password) > 16:
+        if self._gateway.password is not None and (len(self._gateway.password) < 5 or len(self._gateway.password) > 16):
             self._logger.error(
                 "%s Invalid OpenWebNet password: the password must be between 5 and 16 characters long.",
                 self._log_id,
