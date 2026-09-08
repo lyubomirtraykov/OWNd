@@ -546,14 +546,21 @@ class OWNSession:
 
         if self._gateway.password is not None and not (
             isinstance(self._gateway.password, str)
-            and self._gateway.password.isascii()
-            and self._gateway.password.isdecimal()
+            and self._gateway.password.isalnum()
         ):
             self._logger.error(
-                "%s Invalid OpenWebNet password: expected decimal digits only.",
+                "%s Invalid OpenWebNet password: expected alphanumeric only.",
                 self._log_id,
             )
             return {"Success": False, "Message": "password_error"}
+        
+        if len(self._gateway.password) < 5 or len(self._gateway.password) > 16:
+            self._logger.error(
+                "%s Invalid OpenWebNet password: the password must be between 5 and 16 characters long.",
+                self._log_id,
+            )
+            return {"Success": False, "Message": "password_error"}
+        
 
         type_id = 0 if self._type == "command" else 1
         error = False
