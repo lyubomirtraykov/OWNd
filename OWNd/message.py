@@ -763,7 +763,7 @@ class OWNHeatingEvent(OWNEvent):
                 self._human_readable_log = f"Zone {self._zone}'s fan is off."
 
         elif self._dimension == 12:  # Local set temperature (set+offset)
-            self._type = MESSAGE_TYPE_LOCAL_TARGET_TEMPERATURE
+            self._type = MESSAGE_TYPE_LOCAL_TAR
             self._local_set_temperature = float(
                 f"{self._dimension_value[0][1:3]}.{self._dimension_value[0][-1]}"
             )
@@ -797,7 +797,7 @@ class OWNHeatingEvent(OWNEvent):
                 self._human_readable_log = f"Zone {self._zone}'s local control state is '{self._local_control_state}' (raw value {self._local_offset_raw})."
 
         elif self._dimension == 14:  # Set temperature
-            self._type = MESSAGE_TYPE_TARGET_TEMPERATURE
+            self._type = MESSAGE_TYPE_TAR
             self._set_temperature = float(
                 f"{self._dimension_value[0][1:3]}.{self._dimension_value[0][-1]}"
             )
@@ -1803,7 +1803,13 @@ class OWNHeatingCommand(OWNCommand):
     @classmethod
     def get_temperature(cls, where):
         message = cls(f"*#4*{where}*0##")
-        message._human_readable_log = f"Requesting climate status update for {message._where}{message._interface_log_text}."
+        message._human_readable_log = f"Requesting climate temperature update for {message._where}{message._interface_log_text}."
+        return message
+
+    @classmethod
+    def get_humidity(cls, where):
+        message = cls(f"*#4*{where}*60##")
+        message._human_readable_log = f"Requesting climate humidity update for {message._where}{message._interface_log_text}."
         return message
 
     @classmethod
